@@ -1,0 +1,150 @@
+---
+title: 'A Title'
+author: "Thomas Rosenthal"
+date: "March 1, 2021"
+output:
+  github_document:
+  html_document:
+    df_print: paged
+  word_document: default
+  pdf_document:
+    latex_engine: xelatex
+nocite: '@*'
+bibliography: references.bib
+thanks: 'Code and data are available at: [github.com/mrpotatocode/MeanMachine](https://github.com/mrpotatocode/MeanMachine)'
+abstract: An Abstract
+urlcolor: blue
+always_allow_html: true
+---
+
+```{r setup, echo=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE)
+options(scipen=99999)
+```
+
+```{r libraries}
+#Load Library
+library(tidyverse)
+library(data.table)
+library(here)
+library(rstanarm)
+library(gender)
+library(ggplot2)
+library(bayesplot)
+library(kableExtra)
+library(readxl)
+library(fuzzyjoin)
+```
+
+```{r load}
+#Load Data
+#function for fread (data.table)
+read_plus <- function(flnm) {
+    read_csv(flnm) %>% 
+        mutate(filename = flnm)
+}
+
+#survey data
+datafolder <-  paste0(here(),'/data')
+raw_data <-  
+    list.files(path = datafolder,
+      pattern = "*.csv",
+      full.names = T) %>% 
+    map_df(~read_plus(.))
+
+# conformed data (scenarios)
+conformed_folder <-  paste0(here(),'/data/conformed/')
+scenario_file <- paste0(conformed_folder,"Survey Attributes.xlsx")
+scenarios <- read_excel(scenario_file, sheet = "1nf")
+scenarios <- scenarios %>% mutate(Value = str_replace_all(Value, "female","fe"))
+
+#conformed data (questions+answer)
+survey_qa <- read_excel(scenario_file, sheet = "questions")
+survey_qa <- survey_qa %>% mutate(Answer = str_replace_all(Answer, "female","fe"))
+```
+
+```{r}
+#regex join both conformed scenarios and survey questions+answers
+survey <- regex_left_join(survey_qa,scenarios, by = c(Answer = 'Value'))
+survey <- survey %>% mutate(Value = str_replace_all(Value, "fe","female"), Answer = str_replace_all(Answer, "fe","female"))
+```
+
+```{r}
+#add id
+raw_data <- raw_data %>% mutate(survey_id = row_number())
+```
+
+```{r}
+#pivot columns to rows for scenarios
+pivot_scenarios <- paste0('Scenario ' ,seq(1:60))
+
+results_piv <- raw_data %>% pivot_longer(pivot_scenarios) %>% select(survey_id,name,value) %>% rename(question = name, answer = value)
+
+results_piv <- results_piv %>% mutate(answer = str_replace_all(answer, "female","fe"))
+```
+
+```{r}
+#remove NAs -- 
+#its fine to drop all NAs here -- respondants were asked if they wanted to do 20/40/60 questions 
+#if they said yes to 60, there are no NAs, if they said yes to 40, q41-60 are NA (and so on for 20q). no questions could be skipped
+results_rem <- results_piv %>% drop_na()
+```
+
+```{r}
+#regex join to conformed scenarios -- this will match "40-year old" to "40"; "living in an urban community" to "urban" or similar 
+results <- regex_left_join(results_rem, scenarios, by = c(answer = 'Value'))
+results <- results %>% mutate(Value = str_replace_all(Value, "fe","female"), answer = str_replace_all(answer, "fe","female"))
+```
+
+```{r, results = FALSE}
+#quick check of data
+skimr::skim(results)
+```
+
+```{r}
+#results %>% pivot_wider(c(survey_id,quesiton, answer), values_from = c(Attribute,Value))
+#results %>%   rownames_to_column() %>% spread(Attribute,Value)
+#as.data.frame(t(results[4:5]))
+r1 <- results %>% group_by(survey_id,question) %>% slice(1) %>% rename(Attribute1 = Attribute, Value1 = Value)
+r2 <- results %>% group_by(survey_id,question) %>% slice(2) %>% rename(Attribute2 = Attribute, Value2 = Value)
+r3 <- results %>% group_by(survey_id,question) %>% slice(3) %>% rename(Attribute3 = Attribute, Value3 = Value)
+r4 <- results %>% group_by(survey_id,question) %>% slice(4) %>% rename(Attribute4 = Attribute, Value4 = Value)
+
+results_wide <- 
+sqldf::sqldf('select r1.*,Attribute2,Value2,Attribute3,Value3,Attribute4,Value4
+              from r1 r1
+              left join r2 r2 on r1.survey_id = r2.survey_id and r1.question = r2.question
+              left join r3 r3 on r1.survey_id = r3.survey_id and r1.question = r3.question
+              left join r4 r4 on r1.survey_id = r4.survey_id and r1.question = r4.question')
+```
+
+```{r}
+survey %>% group_by(Attribute) %>% summarize(n=n())
+```
+
+```{r}
+a <- survey %>% group_by(Attribute,Value) %>% summarize(n=n())
+a
+```
+
+
+```{r}
+b <- results %>% group_by(Attribute,Value) %>% summarize(n=n())
+b
+```
+
+```{r}
+ab <- merge(b,a, by=c("Attribute","Value"))
+
+ab$n = ab$n.x / ab$n.y
+
+ab %>% arrange_(~ desc(n))
+```
+
+```{r}
+
+```
+
+
+
+
